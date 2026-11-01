@@ -555,6 +555,23 @@ def build_workflow_graph(db: Session):
             "error_message": None,
         }
 
+    def start_router(
+        state: WorkflowState,
+    ) -> str:
+        """
+        Route new workflows through Intake.
+
+        Approved workflows resume directly at Execution
+        using the Redis checkpoint state.
+        """
+        if (
+            state.get("current_state") == "EXECUTION"
+            and state.get("approval_granted") is True
+        ):
+            return "execution"
+
+        return "intake"
+
     graph = StateGraph(
         WorkflowState
     )
@@ -579,9 +596,13 @@ def build_workflow_graph(db: Session):
         review_node,
     )
 
-    graph.add_edge(
+    graph.add_conditional_edges(
         START,
-        "intake",
+        start_router,
+        {
+            "intake": "intake",
+            "execution": "execution",
+        },
     )
 
     graph.add_edge(

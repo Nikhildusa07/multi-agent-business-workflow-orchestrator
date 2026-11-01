@@ -14,6 +14,7 @@ from app.orchestration.transitions import (
     transition_workflow,
 )
 from app.services.audit_service import create_audit_log
+from app.services.redis_service import get_workflow_checkpoint
 
 
 router = APIRouter(
@@ -58,10 +59,7 @@ def approve_request(
     if approval.status != "PENDING":
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Approval is already "
-                f"{approval.status}"
-            ),
+            detail=f"Approval is already {approval.status}",
         )
 
     workflow = (
@@ -83,8 +81,30 @@ def approve_request(
             status_code=409,
             detail=(
                 "Workflow is not waiting for approval. "
-                f"Current state: "
-                f"{workflow.current_state}"
+                f"Current state: {workflow.current_state}"
+            ),
+        )
+
+    checkpoint = get_workflow_checkpoint(
+        workflow.id
+    )
+
+    if checkpoint is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Workflow checkpoint not found. "
+                "The workflow cannot be safely resumed."
+            ),
+        )
+
+    if checkpoint.get("current_state") != "APPROVAL":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Redis checkpoint is not waiting for approval. "
+                f"Current checkpoint state: "
+                f"{checkpoint.get('current_state')}"
             ),
         )
 
@@ -106,8 +126,7 @@ def approve_request(
             action="APPROVAL_GRANTED",
             status="SUCCESS",
             message=(
-                f"Approved by "
-                f"{data.approved_by}"
+                f"Approved by {data.approved_by}"
             ),
         )
 
@@ -121,21 +140,41 @@ def approve_request(
 
         initial_state: WorkflowState = {
             "workflow_id": workflow.id,
-            "workflow_input": workflow.input_data,
+            "workflow_input": checkpoint.get(
+                "workflow_input",
+                workflow.input_data,
+            ),
             "status": "RUNNING",
             "current_state": "EXECUTION",
-            "retry_count": 0,
+            "retry_count": checkpoint.get(
+                "retry_count",
+                0,
+            ),
             "max_retries": 3,
-            "current_task_index": 0,
-            "tasks": [],
-            "execution_results": [],
-            "review_results": [],
+            "current_task_index": checkpoint.get(
+                "current_task_index",
+                0,
+            ),
+            "tasks": checkpoint.get(
+                "tasks",
+                [],
+            ),
+            "execution_results": checkpoint.get(
+                "execution_results",
+                [],
+            ),
+            "review_results": checkpoint.get(
+                "review_results",
+                [],
+            ),
             "approval_granted": True,
             "approval_id": approval.id,
             "error_message": None,
         }
 
-        workflow_graph = build_workflow_graph(db)
+        workflow_graph = build_workflow_graph(
+            db
+        )
 
         result = workflow_graph.invoke(
             initial_state
@@ -204,12 +243,15 @@ def approve_request(
                         next_state="FAILED",
                         error_message=str(exc),
                         agent="SYSTEM",
-                        action="WORKFLOW_FAILED_AFTER_APPROVAL",
+                        action=(
+                            "WORKFLOW_FAILED_AFTER_APPROVAL"
+                        ),
                     )
                 else:
                     workflow.error_message = str(exc)
                     db.commit()
                     db.refresh(workflow)
+
             except Exception:
                 db.rollback()
 
@@ -250,10 +292,7 @@ def reject_request(
     if approval.status != "PENDING":
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Approval is already "
-                f"{approval.status}"
-            ),
+            detail=f"Approval is already {approval.status}",
         )
 
     workflow = (
@@ -275,60 +314,82 @@ def reject_request(
             status_code=409,
             detail=(
                 "Workflow is not waiting for approval. "
-                f"Current state: "
-                f"{workflow.current_state}"
+                f"Current state: {workflow.current_state}"
             ),
         )
 
-    approval.status = "REJECTED"
-    approval.approved_by = data.approved_by
-    approval.approved_at = datetime.now(
-        timezone.utc
-    )
+    try:
+        approval.status = "REJECTED"
+        approval.approved_by = data.approved_by
+        approval.approved_at = datetime.now(
+            timezone.utc
+        )
 
-    workflow.status = "FAILED"
-    workflow.current_state = "APPROVAL"
-    workflow.error_message = (
-        f"Workflow rejected by "
-        f"{data.approved_by}."
-    )
+        db.commit()
+        db.refresh(approval)
 
-    db.commit()
+        transition_workflow(
+            db=db,
+            workflow=workflow,
+            next_state="FAILED",
+            error_message=(
+                f"Workflow rejected by "
+                f"{data.approved_by}."
+            ),
+            agent="human_approval",
+            action="APPROVAL_REJECTED",
+        )
 
-    db.refresh(approval)
-    db.refresh(workflow)
+        create_audit_log(
+            db=db,
+            workflow_id=approval.workflow_id,
+            task_id=approval.task_id,
+            agent="human_approval",
+            action="APPROVAL_REJECTED",
+            status="REJECTED",
+            message=(
+                f"Rejected by "
+                f"{data.approved_by}"
+            ),
+        )
 
-    create_audit_log(
-        db=db,
-        workflow_id=approval.workflow_id,
-        task_id=approval.task_id,
-        agent="human_approval",
-        action="APPROVAL_REJECTED",
-        status="REJECTED",
-        message=(
-            f"Rejected by "
-            f"{data.approved_by}"
-        ),
-    )
+        create_audit_log(
+            db=db,
+            workflow_id=workflow.id,
+            agent="SYSTEM",
+            action="WORKFLOW_REJECTED",
+            status="FAILED",
+            message=(
+                "Workflow stopped because approval "
+                f"was rejected by "
+                f"{data.approved_by}."
+            ),
+        )
 
-    create_audit_log(
-        db=db,
-        workflow_id=workflow.id,
-        agent="SYSTEM",
-        action="WORKFLOW_REJECTED",
-        status="FAILED",
-        message=(
-            "Workflow stopped because approval "
-            f"was rejected by "
-            f"{data.approved_by}."
-        ),
-    )
+        return {
+            "message": (
+                "Approval rejected and "
+                "workflow stopped."
+            ),
+            "approval": approval,
+            "workflow": workflow,
+        }
 
-    return {
-        "message": (
-            "Approval rejected and "
-            "workflow stopped."
-        ),
-        "approval": approval,
-        "workflow": workflow,
-    }
+    except InvalidStateTransition as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        )
+
+    except Exception as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Approval rejection failed: "
+                f"{exc}"
+            ),
+        )
