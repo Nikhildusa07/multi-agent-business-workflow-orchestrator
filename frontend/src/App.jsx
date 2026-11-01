@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
+import { HashRouter, NavLink, Route, Routes } from "react-router-dom";
 
 import Dashboard from "./pages/Dashboard";
 import Workflows from "./pages/Workflows";
@@ -10,7 +10,7 @@ import WorkflowDetails from "./pages/WorkflowDetails";
 
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <div className="app-layout">
         <aside className="sidebar">
           <div className="brand">
@@ -151,7 +151,7 @@ function App() {
           </Routes>
         </main>
       </div>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 
