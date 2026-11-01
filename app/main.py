@@ -1,12 +1,13 @@
+import os
+
+import redis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
-import redis
 
-from app.api.workflows import router as workflow_router
 from app.api.approvals import router as approval_router
 from app.api.audit_logs import router as audit_logs_router
-
+from app.api.workflows import router as workflow_router
 from app.core.config import settings
 from app.database.connection import engine
 
@@ -22,12 +23,20 @@ app = FastAPI(
 # CORS
 # ============================================================
 
+cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+
+allowed_origins = [
+    origin.strip()
+    for origin in cors_origins.split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
