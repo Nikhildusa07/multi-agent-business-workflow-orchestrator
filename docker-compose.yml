@@ -32,7 +32,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+psycopg2://postgres:%40Nikhil15144@postgres:5432/multi_agent_workflow_db
+      DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
