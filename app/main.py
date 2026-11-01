@@ -10,6 +10,7 @@ from app.api.audit_logs import router as audit_logs_router
 from app.api.workflows import router as workflow_router
 from app.core.config import settings
 from app.database.connection import engine
+from app.database.init_db import init_db
 
 
 app = FastAPI(
@@ -17,6 +18,15 @@ app = FastAPI(
     description="AI-powered multi-agent workflow orchestration platform",
     version="1.0.0",
 )
+
+
+# ============================================================
+# DATABASE INITIALIZATION
+# ============================================================
+
+@app.on_event("startup")
+def startup_event():
+    init_db()
 
 
 # ============================================================
